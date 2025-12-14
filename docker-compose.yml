@@ -22,11 +22,10 @@ services:
     networks:
       - klipklap-network
 
-# Use existing network and volumes from klipklap-services
 networks:
   klipklap-network:
-    external: true
+    driver: bridge
 
 volumes:
   yt-dlp-downloads:
-    external: true
+    driver: local
