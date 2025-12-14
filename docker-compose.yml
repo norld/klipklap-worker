@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  yt-dlp-worker:
+    build: .
+    container_name: yt-dlp-worker
+    # No external port mapping - service is only accessible via internal network
+    volumes:
+      - yt-dlp-downloads:/app/downloads
+      - ./logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - API_KEY=${YTDLP_API_KEY:-your-secret-api-key}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - klipklap-network
+
+# Use existing network and volumes from klipklap-services
+networks:
+  klipklap-network:
+    external: true
+
+volumes:
+  yt-dlp-downloads:
+    external: true
