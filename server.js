@@ -2,7 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
-const youtubedl = require('yt-dlp');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -54,7 +56,8 @@ app.post('/info', async (req, res) => {
       return res.status(400).json({ error: 'URL is required' });
     }
 
-    const info = await youtubedl.getInfo(url);
+    const { stdout } = await execAsync(`yt-dlp --dump-json "${url}"`);
+    const info = JSON.parse(stdout);
 
     res.json({
       title: info.title,
@@ -91,34 +94,14 @@ app.post('/download', async (req, res) => {
     const outputFilename = filename || `%(title)s.%(ext)s`;
     const outputPath = path.join(DOWNLOADS_DIR, outputFilename);
 
-    const options = {
-      output: outputPath,
-      format: format
-    };
+    const command = `yt-dlp -f "${format}" -o "${outputPath}" "${url}"`;
 
-    // Start the download
-    const download = youtubedl.exec(url, options);
-
-    let downloadProgress = 0;
-
-    download.on('progress', (progress) => {
-      downloadProgress = progress.percent;
-      console.log(`Download progress: ${progress.percent}%`);
-    });
-
-    download.on('error', (error) => {
-      console.error('Download error:', error);
-    });
-
-    download.on('close', () => {
-      console.log('Download completed');
-    });
-
-    // Wait for download to complete
-    await download;
+    // Execute the download
+    await execAsync(command);
 
     // Get the actual filename (yt-dlp substitutes template variables)
-    const info = await youtubedl.getInfo(url);
+    const { stdout } = await execAsync(`yt-dlp --dump-json "${url}"`);
+    const info = JSON.parse(stdout);
     const actualFilename = `${info.title}.${info.ext}`;
     const filePath = path.join(DOWNLOADS_DIR, actualFilename);
 
