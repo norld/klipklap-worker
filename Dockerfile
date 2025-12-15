@@ -1,14 +1,17 @@
 # Use Node.js runtime
 FROM node:18-alpine
 
-# Install yt-dlp and ffmpeg
+# Install yt-dlp, ffmpeg, and JavaScript runtime
 RUN apk add --no-cache \
     python3 \
     py3-pip \
     ffmpeg \
+    nodejs \
+    npm \
     && python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir yt-dlp \
-    && ln -sf /opt/venv/bin/yt-dlp /usr/local/bin/yt-dlp
+    && ln -sf /opt/venv/bin/yt-dlp /usr/local/bin/yt-dlp \
+    && npm install -g deno
 
 # Set working directory
 WORKDIR /app

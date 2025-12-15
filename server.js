@@ -50,14 +50,37 @@ app.get('/health', (req, res) => {
 // Get video info endpoint
 app.post('/info', async (req, res) => {
   try {
-    const { url } = req.body;
+    const { url, cookies, cookiesContent } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
     }
 
-    const { stdout } = await execAsync(`yt-dlp --dump-json "${url}"`);
+    // Build command with optional cookies
+    let command = `yt-dlp --js-runtimes deno --dump-json "${url}"`;
+    let tempCookiesFile = null;
+
+    if (cookiesContent) {
+      // Create temporary cookies file from content
+      tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
+      await fs.writeFile(tempCookiesFile, cookiesContent);
+      command += ` --cookies "${tempCookiesFile}"`;
+    } else if (cookies) {
+      // Use cookies file path
+      command += ` --cookies "${cookies}"`;
+    }
+
+    const { stdout } = await execAsync(command);
     const info = JSON.parse(stdout);
+
+    // Clean up temporary cookies file if created
+    if (tempCookiesFile) {
+      try {
+        await fs.unlink(tempCookiesFile);
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temporary cookies file:', cleanupError);
+      }
+    }
 
     res.json({
       title: info.title,
@@ -85,7 +108,7 @@ app.post('/info', async (req, res) => {
 // Download video endpoint
 app.post('/download', async (req, res) => {
   try {
-    const { url, format = 'best', filename } = req.body;
+    const { url, format = 'best', filename, cookies, cookiesContent } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
@@ -94,16 +117,46 @@ app.post('/download', async (req, res) => {
     const outputFilename = filename || `%(title)s.%(ext)s`;
     const outputPath = path.join(DOWNLOADS_DIR, outputFilename);
 
-    const command = `yt-dlp -f "${format}" -o "${outputPath}" "${url}"`;
+    // Handle cookies - either from content or file path
+    let tempCookiesFile = null;
+    let cookiesFile = cookies;
+
+    if (cookiesContent) {
+      // Create temporary cookies file from content
+      tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
+      await fs.writeFile(tempCookiesFile, cookiesContent);
+      cookiesFile = tempCookiesFile;
+    }
+
+    // Build command with optional cookies
+    let command = `yt-dlp --js-runtimes deno -f "${format}" -o "${outputPath}"`;
+    if (cookiesFile) {
+      command += ` --cookies "${cookiesFile}"`;
+    }
+    command += ` "${url}"`;
 
     // Execute the download
     await execAsync(command);
 
     // Get the actual filename (yt-dlp substitutes template variables)
-    const { stdout } = await execAsync(`yt-dlp --dump-json "${url}"`);
+    let infoCommand = `yt-dlp --js-runtimes deno --dump-json "${url}"`;
+    if (cookiesFile) {
+      infoCommand += ` --cookies "${cookiesFile}"`;
+    }
+
+    const { stdout } = await execAsync(infoCommand);
     const info = JSON.parse(stdout);
     const actualFilename = `${info.title}.${info.ext}`;
     const filePath = path.join(DOWNLOADS_DIR, actualFilename);
+
+    // Clean up temporary cookies file if created
+    if (tempCookiesFile) {
+      try {
+        await fs.unlink(tempCookiesFile);
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temporary cookies file:', cleanupError);
+      }
+    }
 
     // Check if file exists
     try {
