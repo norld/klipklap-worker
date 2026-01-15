@@ -1,3 +1,6 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -7,7 +10,7 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3002;
 const API_KEY = process.env.API_KEY;
 
 // API Key authentication middleware
@@ -146,8 +149,6 @@ app.post('/download', async (req, res) => {
 
     const { stdout } = await execAsync(infoCommand);
     const info = JSON.parse(stdout);
-    const actualFilename = `${info.title}.${info.ext}`;
-    const filePath = path.join(DOWNLOADS_DIR, actualFilename);
 
     // Clean up temporary cookies file if created
     if (tempCookiesFile) {
@@ -158,20 +159,72 @@ app.post('/download', async (req, res) => {
       }
     }
 
-    // Check if file exists
+    // Try to find the downloaded file
     try {
-      await fs.access(filePath);
-      res.json({
-        success: true,
-        message: 'Download completed',
-        filename: actualFilename,
-        path: filePath
-      });
+      const files = await fs.readdir(DOWNLOADS_DIR);
+
+      // If a specific filename was requested, try that first
+      if (filename && filename !== '%(title)s.%(ext)s') {
+        const requestedFile = filename;
+        const requestedPath = path.join(DOWNLOADS_DIR, requestedFile);
+        try {
+          await fs.access(requestedPath);
+          return res.json({
+            success: true,
+            message: 'Download completed',
+            filename: requestedFile,
+            path: requestedPath
+          });
+        } catch (e) {
+          console.log(`Requested filename not found, searching for downloaded file...`);
+        }
+      }
+
+      // Search for files by video ID or title
+      const downloadedFiles = files.filter(f =>
+        f.includes(info.id) ||
+        f.includes(info.title?.substring(0, 20).replace(/[^\w\s-]/g, '')) ||
+        (filename && f === filename)
+      );
+
+      if (downloadedFiles.length > 0) {
+        const actualFilename = downloadedFiles[0];
+        const filePath = path.join(DOWNLOADS_DIR, actualFilename);
+        return res.json({
+          success: true,
+          message: 'Download completed',
+          filename: actualFilename,
+          path: filePath
+        });
+      }
+
+      // As a last resort, return the most recently modified file
+      const fileStats = [];
+      for (const file of files) {
+        const filePath = path.join(DOWNLOADS_DIR, file);
+        const stats = await fs.stat(filePath);
+        fileStats.push({ file, mtime: stats.mtime });
+      }
+      fileStats.sort((a, b) => b.mtime - a.mtime);
+
+      if (fileStats.length > 0) {
+        const latestFile = fileStats[0].file;
+        const latestPath = path.join(DOWNLOADS_DIR, latestFile);
+        return res.json({
+          success: true,
+          message: 'Download completed',
+          filename: latestFile,
+          path: latestPath
+        });
+      }
+
+      throw new Error('Downloaded file not found');
     } catch (error) {
-      res.json({
-        success: true,
-        message: 'Download completed (file path may differ)',
-        outputPath: outputPath
+      console.error('Error locating downloaded file:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Download completed but file not found',
+        details: error.message
       });
     }
 

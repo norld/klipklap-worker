@@ -1,0 +1,4 @@
+[dotenv@17.2.3] injecting env (2) from .env -- tip: 🔑 add access controls to secrets: https://dotenvx.com/ops
+yt-dlp worker running on port 3002
+Health check: http://localhost:3002/health
+Downloads directory: /Users/norld/Sites/klip-ai-pro/klipklap-worker/downloads
