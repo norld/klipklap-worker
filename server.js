@@ -10,7 +10,7 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 
 const app = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY;
 
 // API Key authentication middleware
