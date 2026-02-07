@@ -10,7 +10,7 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3002;
 const API_KEY = process.env.API_KEY;
 
 // Trust proxy - required for Cloudflare/other reverse proxies
@@ -50,6 +50,29 @@ app.use((req, res, next) => {
 // Create downloads directory if it doesn't exist
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
 fs.mkdir(DOWNLOADS_DIR, { recursive: true });
+
+// Logging middleware
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path} - IP: ${req.ip}`);
+  next();
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    service: 'yt-dlp-worker',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: 'GET /health',
+      info: 'POST /info',
+      download: 'POST /download',
+      downloads: 'GET /downloads',
+      downloadFile: 'GET /downloads/:filename',
+      deleteFile: 'DELETE /downloads/:filename'
+    }
+  });
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -300,13 +323,20 @@ app.delete('/downloads/:filename', async (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  console.error('Error:', err);
+  res.status(500).json({ error: 'Something went wrong!', details: err.message });
 });
 
-// 404 handler
+// 404 handler - must be last
 app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+  console.log(`404 - Method: ${req.method}, Path: ${req.path}, URL: req.url}`);
+  res.status(404).json({
+    error: 'Endpoint not found',
+    method: req.method,
+    path: req.path,
+    url: req.url,
+    availableEndpoints: ['/health', '/', '/info', '/download', '/downloads']
+  });
 });
 
 app.listen(PORT, () => {
