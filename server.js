@@ -10,12 +10,18 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const API_KEY = process.env.API_KEY;
+
+// Trust proxy - required for Cloudflare/other reverse proxies
+app.set('trust proxy', true);
 
 // API Key authentication middleware
 const requireApiKey = (req, res, next) => {
-  const providedKey = req.headers['x-api-key'] || req.query.api_key;
+  // Check multiple header sources for Cloudflare compatibility
+  const providedKey = req.headers['x-api-key'] ||
+                       req.headers['x-api-key'.toLowerCase()] ||
+                       req.query.api_key;
 
   if (!API_KEY) {
     return res.status(500).json({ error: 'API key not configured on server' });
