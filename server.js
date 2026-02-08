@@ -66,9 +66,14 @@ app.get('/', (req, res) => {
     features: {
       browserCookies: {
         enabled: true,
+        forced: true,
         defaultBrowser: 'chromium',
         supportedBrowsers: ['chrome', 'chromium', 'firefox', 'safari', 'edge', 'opera', 'brave', 'vivaldi'],
-        note: 'Uses --cookies-from-browser flag. Falls back to android client if unavailable.'
+        fallbackOrder: [
+          '1. Browser cookies (chromium by default)',
+          '2. Explicit cookies file/content (if provided)',
+          '3. Android client (no cookies)'
+        ]
       }
     },
     endpoints: {
@@ -83,7 +88,8 @@ app.get('/', (req, res) => {
       infoWithDefaultBrowser: {
         method: 'POST',
         url: '/info',
-        body: { url: 'https://www.youtube.com/watch?v=xxx' }
+        body: { url: 'https://www.youtube.com/watch?v=xxx' },
+        note: 'Always tries Chromium cookies first'
       },
       infoWithSpecificBrowser: {
         method: 'POST',
@@ -111,7 +117,7 @@ app.post('/info', async (req, res) => {
     }
 
     let info;
-    let command;
+    const browserName = browser || 'chromium';  // Default to chromium
 
     // Helper function to clean up temp cookies file
     const cleanup = async () => {
@@ -124,64 +130,58 @@ app.post('/info', async (req, res) => {
       }
     };
 
-    // Priority: cookies-from-browser (default chromium) > cookies file > cookies content > android client
-    const browserName = browser || 'chromium';  // Default to chromium
+    // ALWAYS try browser cookies first, then fall back to explicit cookies, then android client
+    console.log(`Step 1: Trying browser cookies (${browserName})...`);
 
-    if (browser || (!cookies && !cookiesContent)) {
-      // Use cookies from browser (chrome, chromium, firefox, etc.)
-      command = `yt-dlp --dump-json --skip-download --cookies-from-browser ${browserName} "${url}"`;
-      console.log(`Using cookies from browser (${browserName}):`, command);
-      try {
-        const { stdout } = await execAsync(command);
-        info = JSON.parse(stdout);
-      } catch (browserError) {
-        console.log('Browser cookies failed, falling back to android client:', browserError.message);
-        command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
-        console.log("Retrying with android client:", command);
-        const { stdout } = await execAsync(command);
-        info = JSON.parse(stdout);
-      }
-    } else if (cookiesContent || cookies) {
-      if (cookiesContent) {
-        tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
-        await fs.writeFile(tempCookiesFile, cookiesContent);
-        command = `yt-dlp --dump-json --skip-download "${url}" --cookies "${tempCookiesFile}"`;
-      } else if (cookies) {
-        command = `yt-dlp --dump-json --skip-download "${url}" --cookies "${cookies}"`;
-      }
-
-      console.log("Trying with cookies:", command);
-      try {
-        const { stdout } = await execAsync(command);
-        info = JSON.parse(stdout);
-
-        // Check if only images are available (cookies failed)
-        const hasVideoFormats = info.formats && info.formats.some(f =>
-          f.vcodec && f.vcodec !== 'none' && f.ext !== 'mhtml' && f.ext !== 'sb'
-        );
-
-        if (!hasVideoFormats) {
-          console.log('Cookies returned no video formats, falling back to android client');
-          throw new Error('No video formats available with cookies');
-        }
-
-        await cleanup();
-      } catch (cookiesError) {
-        console.log('Cookie request failed, falling back to android client:', cookiesError.message);
-        await cleanup();
-
-        // Fall back to android client (no cookies)
-        command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
-        console.log("Retrying with android client:", command);
-        const { stdout } = await execAsync(command);
-        info = JSON.parse(stdout);
-      }
-    } else {
-      // No cookies - use android client directly
-      command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
-      console.log("command", command);
+    try {
+      const command = `yt-dlp --dump-json --skip-download --cookies-from-browser ${browserName} "${url}"`;
+      console.log(`Command: ${command}`);
       const { stdout } = await execAsync(command);
       info = JSON.parse(stdout);
+      console.log(`✓ Browser cookies succeeded!`);
+    } catch (browserError) {
+      console.log(`✗ Browser cookies failed: ${browserError.message}`);
+
+      // Try explicit cookies if provided
+      if (cookiesContent || cookies) {
+        console.log(`Step 2: Trying explicit cookies...`);
+
+        try {
+          let command;
+          if (cookiesContent) {
+            tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
+            await fs.writeFile(tempCookiesFile, cookiesContent);
+            command = `yt-dlp --dump-json --skip-download "${url}" --cookies "${tempCookiesFile}"`;
+          } else {
+            command = `yt-dlp --dump-json --skip-download "${url}" --cookies "${cookies}"`;
+          }
+
+          console.log(`Command: ${command}`);
+          const { stdout } = await execAsync(command);
+          info = JSON.parse(stdout);
+          console.log(`✓ Explicit cookies succeeded!`);
+          await cleanup();
+        } catch (cookiesError) {
+          console.log(`✗ Explicit cookies failed: ${cookiesError.message}`);
+          await cleanup();
+
+          // Fall back to android client
+          console.log(`Step 3: Falling back to android client...`);
+          const command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
+          console.log(`Command: ${command}`);
+          const { stdout } = await execAsync(command);
+          info = JSON.parse(stdout);
+          console.log(`✓ Android client succeeded!`);
+        }
+      } else {
+        // No explicit cookies, go straight to android client
+        console.log(`Step 2: Falling back to android client...`);
+        const command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
+        console.log(`Command: ${command}`);
+        const { stdout } = await execAsync(command);
+        info = JSON.parse(stdout);
+        console.log(`✓ Android client succeeded!`);
+      }
     }
 
     res.json({
@@ -228,6 +228,7 @@ app.post('/download', async (req, res) => {
 
     const outputFilename = filename || `%(title)s.%(ext)s`;
     const outputPath = path.join(DOWNLOADS_DIR, outputFilename);
+    const browserName = browser || 'chromium';  // Default to chromium
 
     // Helper function to clean up temp cookies file
     const cleanup = async () => {
@@ -249,76 +250,73 @@ app.post('/download', async (req, res) => {
     //   /                       - OR (fallback if above fails)
     //   best[height<=720]       - best pre-merged format with max 720p
     const formatSelector = format || 'bestvideo[height<=720]+bestaudio/best[height<=720]';
-    let command;
-    let usedBrowserCookies = false;
-    const browserName = browser || 'chromium';  // Default to chromium
 
-    // Priority: browser cookies (default chromium) > cookies file > cookies content > android client
-    if (browser || (!cookies && !cookiesContent)) {
-      // Use cookies from browser
-      command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies-from-browser ${browserName} "${url}"`;
-      console.log(`Using browser cookies (${browserName}):`, command);
-      try {
-        await execAsync(command);
-        usedBrowserCookies = true;
-      } catch (browserError) {
-        console.log('Browser cookies failed, falling back to android client:', browserError.message);
-        command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
-        console.log("Retrying with android client:", command);
-        await execAsync(command);
-      }
-    } else {
-      // Handle cookies - either from content or file path
-      let cookiesFile = cookies;
+    // ALWAYS try browser cookies first, then fall back to explicit cookies, then android client
+    console.log(`Step 1: Trying browser cookies (${browserName})...`);
 
-      if (cookiesContent) {
-        // Create temporary cookies file from content
-        tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
-        await fs.writeFile(tempCookiesFile, cookiesContent);
-        cookiesFile = tempCookiesFile;
-      }
+    try {
+      const command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies-from-browser ${browserName} "${url}"`;
+      console.log(`Command: ${command}`);
+      await execAsync(command);
+      console.log(`✓ Browser cookies succeeded!`);
+    } catch (browserError) {
+      console.log(`✗ Browser cookies failed: ${browserError.message}`);
 
-      if (cookiesFile) {
-        // Try with cookies first
-        command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies "${cookiesFile}" "${url}"`;
-        console.log("Trying with cookies:", command);
+      // Try explicit cookies if provided
+      if (cookiesContent || cookies) {
+        console.log(`Step 2: Trying explicit cookies...`);
+
         try {
+          let command;
+          let cookiesFile = cookies;
+
+          if (cookiesContent) {
+            tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
+            await fs.writeFile(tempCookiesFile, cookiesContent);
+            cookiesFile = tempCookiesFile;
+          }
+
+          command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies "${cookiesFile}" "${url}"`;
+          console.log(`Command: ${command}`);
           await execAsync(command);
-          // Success - continue to get file info
+          console.log(`✓ Explicit cookies succeeded!`);
         } catch (cookiesError) {
-          console.log('Cookie download failed, falling back to android client:', cookiesError.message);
+          console.log(`✗ Explicit cookies failed: ${cookiesError.message}`);
           await cleanup();
 
           // Fall back to android client
-          command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
-          console.log("Retrying with android client:", command);
+          console.log(`Step 3: Falling back to android client...`);
+          const command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
+          console.log(`Command: ${command}`);
           await execAsync(command);
+          console.log(`✓ Android client succeeded!`);
         }
       } else {
-        // No cookies - use android client directly
-        command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
-        console.log("command", command);
+        // No explicit cookies, go straight to android client
+        console.log(`Step 2: Falling back to android client...`);
+        const command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
+        console.log(`Command: ${command}`);
         await execAsync(command);
+        console.log(`✓ Android client succeeded!`);
       }
     }
 
     // Get the actual filename (yt-dlp substitutes template variables)
-    let infoCommand;
-    if (browser || (!cookies && !cookiesContent)) {
-      infoCommand = `yt-dlp --dump-json --cookies-from-browser ${browserName} "${url}"`;
-    } else if (cookies || cookiesContent) {
-      let cookiesFile = cookies || tempCookiesFile;
-      if (cookiesFile) {
-        infoCommand = `yt-dlp --dump-json "${url}" --cookies "${cookiesFile}"`;
-      } else {
-        infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
-      }
-    } else {
-      infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
-    }
+    // Use browser cookies for info command too
+    let info;
+    let infoCommand = `yt-dlp --dump-json --cookies-from-browser ${browserName} "${url}"`;
+    console.log(`Getting file info with browser cookies...`);
 
-    const { stdout } = await execAsync(infoCommand);
-    const info = JSON.parse(stdout);
+    try {
+      const { stdout } = await execAsync(infoCommand);
+      info = JSON.parse(stdout);
+    } catch (infoError) {
+      // Fall back to android client for info
+      console.log(`Info with browser cookies failed, using android client...`);
+      infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
+      const { stdout } = await execAsync(infoCommand);
+      info = JSON.parse(stdout);
+    }
 
     // Clean up temporary cookies file if created
     await cleanup();
