@@ -63,13 +63,33 @@ app.get('/', (req, res) => {
     service: 'yt-dlp-worker',
     version: '1.0.0',
     status: 'running',
+    features: {
+      browserCookies: {
+        enabled: true,
+        defaultBrowser: 'chromium',
+        supportedBrowsers: ['chrome', 'chromium', 'firefox', 'safari', 'edge', 'opera', 'brave', 'vivaldi'],
+        note: 'Uses --cookies-from-browser flag. Falls back to android client if unavailable.'
+      }
+    },
     endpoints: {
       health: 'GET /health',
-      info: 'POST /info',
-      download: 'POST /download',
+      info: 'POST /info - Body: { url, browser?, cookies?, cookiesContent? }',
+      download: 'POST /download - Body: { url, format?, filename?, browser?, cookies?, cookiesContent? }',
       downloads: 'GET /downloads',
       downloadFile: 'GET /downloads/:filename',
       deleteFile: 'DELETE /downloads/:filename'
+    },
+    examples: {
+      infoWithDefaultBrowser: {
+        method: 'POST',
+        url: '/info',
+        body: { url: 'https://www.youtube.com/watch?v=xxx' }
+      },
+      infoWithSpecificBrowser: {
+        method: 'POST',
+        url: '/info',
+        body: { url: 'https://www.youtube.com/watch?v=xxx', browser: 'chrome' }
+      }
     }
   });
 });
@@ -81,43 +101,87 @@ app.get('/health', (req, res) => {
 
 // Get video info endpoint
 app.post('/info', async (req, res) => {
+  let tempCookiesFile = null;
+
   try {
-    const { url, cookies, cookiesContent } = req.body;
+    const { url, cookies, cookiesContent, browser } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
     }
 
-    // Build command with optional cookies
+    let info;
     let command;
-    let tempCookiesFile = null;
 
-    if (cookiesContent || cookies) {
-      // Use cookies with default client (cookies don't work with android client)
-      // Prefer Deno for JS runtime as it handles YouTube challenges better
-      command = `yt-dlp --list-formats -J --skip-download "${url}"`;
+    // Helper function to clean up temp cookies file
+    const cleanup = async () => {
+      if (tempCookiesFile) {
+        try {
+          await fs.unlink(tempCookiesFile);
+        } catch (cleanupError) {
+          console.warn('Failed to cleanup temporary cookies file:', cleanupError);
+        }
+      }
+    };
+
+    // Priority: cookies-from-browser (default chromium) > cookies file > cookies content > android client
+    const browserName = browser || 'chromium';  // Default to chromium
+
+    if (browser || (!cookies && !cookiesContent)) {
+      // Use cookies from browser (chrome, chromium, firefox, etc.)
+      command = `yt-dlp --dump-json --skip-download --cookies-from-browser ${browserName} "${url}"`;
+      console.log(`Using cookies from browser (${browserName}):`, command);
+      try {
+        const { stdout } = await execAsync(command);
+        info = JSON.parse(stdout);
+      } catch (browserError) {
+        console.log('Browser cookies failed, falling back to android client:', browserError.message);
+        command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
+        console.log("Retrying with android client:", command);
+        const { stdout } = await execAsync(command);
+        info = JSON.parse(stdout);
+      }
+    } else if (cookiesContent || cookies) {
       if (cookiesContent) {
         tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
         await fs.writeFile(tempCookiesFile, cookiesContent);
-        command += ` --cookies "${tempCookiesFile}"`;
+        command = `yt-dlp --dump-json --skip-download "${url}" --cookies "${tempCookiesFile}"`;
       } else if (cookies) {
-        command += ` --cookies "${cookies}"`;
+        command = `yt-dlp --dump-json --skip-download "${url}" --cookies "${cookies}"`;
+      }
+
+      console.log("Trying with cookies:", command);
+      try {
+        const { stdout } = await execAsync(command);
+        info = JSON.parse(stdout);
+
+        // Check if only images are available (cookies failed)
+        const hasVideoFormats = info.formats && info.formats.some(f =>
+          f.vcodec && f.vcodec !== 'none' && f.ext !== 'mhtml' && f.ext !== 'sb'
+        );
+
+        if (!hasVideoFormats) {
+          console.log('Cookies returned no video formats, falling back to android client');
+          throw new Error('No video formats available with cookies');
+        }
+
+        await cleanup();
+      } catch (cookiesError) {
+        console.log('Cookie request failed, falling back to android client:', cookiesError.message);
+        await cleanup();
+
+        // Fall back to android client (no cookies)
+        command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
+        console.log("Retrying with android client:", command);
+        const { stdout } = await execAsync(command);
+        info = JSON.parse(stdout);
       }
     } else {
-      // No cookies - use android client to avoid challenges
+      // No cookies - use android client directly
       command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
-    }
-    console.log("command", command);
-    const { stdout } = await execAsync(command);
-    const info = JSON.parse(stdout);
-
-    // Clean up temporary cookies file if created
-    if (tempCookiesFile) {
-      try {
-        await fs.unlink(tempCookiesFile);
-      } catch (cleanupError) {
-        console.warn('Failed to cleanup temporary cookies file:', cleanupError);
-      }
+      console.log("command", command);
+      const { stdout } = await execAsync(command);
+      info = JSON.parse(stdout);
     }
 
     res.json({
@@ -138,6 +202,14 @@ app.post('/info', async (req, res) => {
       }))
     });
   } catch (error) {
+    // Clean up on error
+    if (tempCookiesFile) {
+      try {
+        await fs.unlink(tempCookiesFile);
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temporary cookies file:', cleanupError);
+      }
+    }
     console.error('Error getting video info:', error);
     res.status(500).json({ error: 'Failed to get video info', details: error.message });
   }
@@ -145,8 +217,10 @@ app.post('/info', async (req, res) => {
 
 // Download video endpoint
 app.post('/download', async (req, res) => {
+  let tempCookiesFile = null;
+
   try {
-    const { url, format, filename, cookies, cookiesContent } = req.body;
+    const { url, format, filename, cookies, cookiesContent, browser } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
@@ -155,16 +229,17 @@ app.post('/download', async (req, res) => {
     const outputFilename = filename || `%(title)s.%(ext)s`;
     const outputPath = path.join(DOWNLOADS_DIR, outputFilename);
 
-    // Handle cookies - either from content or file path
-    let tempCookiesFile = null;
-    let cookiesFile = cookies;
-
-    if (cookiesContent) {
-      // Create temporary cookies file from content
-      tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
-      await fs.writeFile(tempCookiesFile, cookiesContent);
-      cookiesFile = tempCookiesFile;
-    }
+    // Helper function to clean up temp cookies file
+    const cleanup = async () => {
+      if (tempCookiesFile) {
+        try {
+          await fs.unlink(tempCookiesFile);
+          tempCookiesFile = null;
+        } catch (cleanupError) {
+          console.warn('Failed to cleanup temporary cookies file:', cleanupError);
+        }
+      }
+    };
 
     // Build command with optional cookies
     // Default format: best video up to 720p + best audio, merged
@@ -175,22 +250,69 @@ app.post('/download', async (req, res) => {
     //   best[height<=720]       - best pre-merged format with max 720p
     const formatSelector = format || 'bestvideo[height<=720]+bestaudio/best[height<=720]';
     let command;
-    if (cookiesFile) {
-      // Use cookies with default client (cookies don't work with android client)
-      command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies "${cookiesFile}"`;
+    let usedBrowserCookies = false;
+    const browserName = browser || 'chromium';  // Default to chromium
+
+    // Priority: browser cookies (default chromium) > cookies file > cookies content > android client
+    if (browser || (!cookies && !cookiesContent)) {
+      // Use cookies from browser
+      command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies-from-browser ${browserName} "${url}"`;
+      console.log(`Using browser cookies (${browserName}):`, command);
+      try {
+        await execAsync(command);
+        usedBrowserCookies = true;
+      } catch (browserError) {
+        console.log('Browser cookies failed, falling back to android client:', browserError.message);
+        command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
+        console.log("Retrying with android client:", command);
+        await execAsync(command);
+      }
     } else {
-      // No cookies - use android client to avoid challenges
-      command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}"`;
+      // Handle cookies - either from content or file path
+      let cookiesFile = cookies;
+
+      if (cookiesContent) {
+        // Create temporary cookies file from content
+        tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
+        await fs.writeFile(tempCookiesFile, cookiesContent);
+        cookiesFile = tempCookiesFile;
+      }
+
+      if (cookiesFile) {
+        // Try with cookies first
+        command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies "${cookiesFile}" "${url}"`;
+        console.log("Trying with cookies:", command);
+        try {
+          await execAsync(command);
+          // Success - continue to get file info
+        } catch (cookiesError) {
+          console.log('Cookie download failed, falling back to android client:', cookiesError.message);
+          await cleanup();
+
+          // Fall back to android client
+          command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
+          console.log("Retrying with android client:", command);
+          await execAsync(command);
+        }
+      } else {
+        // No cookies - use android client directly
+        command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}" "${url}"`;
+        console.log("command", command);
+        await execAsync(command);
+      }
     }
-    command += ` "${url}"`;
-    console.log("command", command);
-    // Execute the download
-    await execAsync(command);
 
     // Get the actual filename (yt-dlp substitutes template variables)
     let infoCommand;
-    if (cookiesFile) {
-      infoCommand = `yt-dlp --dump-json "${url}" --cookies "${cookiesFile}"`;
+    if (browser || (!cookies && !cookiesContent)) {
+      infoCommand = `yt-dlp --dump-json --cookies-from-browser ${browserName} "${url}"`;
+    } else if (cookies || cookiesContent) {
+      let cookiesFile = cookies || tempCookiesFile;
+      if (cookiesFile) {
+        infoCommand = `yt-dlp --dump-json "${url}" --cookies "${cookiesFile}"`;
+      } else {
+        infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
+      }
     } else {
       infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
     }
@@ -199,13 +321,7 @@ app.post('/download', async (req, res) => {
     const info = JSON.parse(stdout);
 
     // Clean up temporary cookies file if created
-    if (tempCookiesFile) {
-      try {
-        await fs.unlink(tempCookiesFile);
-      } catch (cleanupError) {
-        console.warn('Failed to cleanup temporary cookies file:', cleanupError);
-      }
-    }
+    await cleanup();
 
     // Try to find the downloaded file
     try {

@@ -1,14 +1,21 @@
 # Use Node.js runtime
 FROM node:18-alpine
 
-# Install yt-dlp, ffmpeg, and JavaScript runtime
+# Install yt-dlp, ffmpeg, JavaScript runtime, and Chromium with dependencies
+# Dependencies needed for --cookies-from-browser support:
+# - sqlite3: for reading browser cookie databases
+# - keyutils: for credential storage access
+# - chromium: the browser itself
 RUN apk add --no-cache \
+    chromium \
+    chromium-chromedriver \
     python3 \
     py3-pip \
     ffmpeg \
     nodejs \
     npm \
     curl \
+    sqlite-libs \
     && python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir yt-dlp \
@@ -16,6 +23,14 @@ RUN apk add --no-cache \
     && curl -fsSL https://deno.land/install.sh | sh \
     && mv /root/.deno/bin/deno /usr/local/bin/deno \
     && rm -rf /root/.deno
+
+# Create Chromium profile directory for cookies
+RUN mkdir -p /root/.config/chromium && \
+    mkdir -p /root/.config/google-chrome
+
+# Set Chromium environment variables
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+ENV CHROMIUM_BIN=/usr/bin/chromium-browser
 
 # Set working directory
 WORKDIR /app

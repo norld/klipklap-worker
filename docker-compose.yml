@@ -2,14 +2,14 @@ services:
   yt-dlp-worker:
     build: .
     container_name: yt-dlp-worker
-    # No external port mapping - service is only accessible via internal network
     volumes:
       - yt-dlp-downloads:/app/downloads
       - ./logs:/app/logs
-    # env_file:
-    #   - .env.prod
+      # Mount Chromium config for --cookies-from-browser support
+      # Uncomment the line below and adjust path to your host's Chromium config
+      - ~/.config/chromium:/root/.config/chromium:ro
     environment:
-      - NODE_ENV=${NODE_ENV}
+      - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT}
       - API_KEY=${API_KEY}
     restart: unless-stopped
