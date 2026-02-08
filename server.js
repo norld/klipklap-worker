@@ -89,7 +89,7 @@ app.post('/info', async (req, res) => {
     }
 
     // Build command with optional cookies
-    let command = `yt-dlp --dump-json "${url}"`;
+    let command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android,android_embed,mediaconnect" "${url}"`;
     let tempCookiesFile = null;
 
     if (cookiesContent) {
@@ -168,7 +168,7 @@ app.post('/download', async (req, res) => {
     //   /                       - OR (fallback if above fails)
     //   best[height<=720]       - best pre-merged format with max 720p
     const formatSelector = format || 'bestvideo[height<=720]+bestaudio/best[height<=720]';
-    let command = `yt-dlp -f "${formatSelector}" -o "${outputPath}"`;
+    let command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android,android_embed,mediaconnect" -o "${outputPath}"`;
     if (cookiesFile) {
       command += ` --cookies "${cookiesFile}"`;
     }
@@ -178,7 +178,7 @@ app.post('/download', async (req, res) => {
     await execAsync(command);
 
     // Get the actual filename (yt-dlp substitutes template variables)
-    let infoCommand = `yt-dlp --dump-json "${url}"`;
+    let infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android,android_embed,mediaconnect" "${url}"`;
     if (cookiesFile) {
       infoCommand += ` --cookies "${cookiesFile}"`;
     }

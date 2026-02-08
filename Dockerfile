@@ -10,7 +10,6 @@ RUN apk add --no-cache \
     npm \
     curl \
     && python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir yt-dlp \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade yt-dlp \
     && ln -sf /opt/venv/bin/yt-dlp /usr/local/bin/yt-dlp \
     && curl -fsSL https://deno.land/install.sh | sh \
