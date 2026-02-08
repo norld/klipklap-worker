@@ -94,7 +94,7 @@ app.post('/info', async (req, res) => {
 
     if (cookiesContent || cookies) {
       // Use cookies with default client (cookies don't work with android client)
-      command = `yt-dlp -J --skip-download "${url}"`;
+      command = `yt-dlp -J --skip-download --js-runtimes node "${url}"`;
       if (cookiesContent) {
         tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
         await fs.writeFile(tempCookiesFile, cookiesContent);
