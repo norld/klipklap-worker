@@ -89,17 +89,22 @@ app.post('/info', async (req, res) => {
     }
 
     // Build command with optional cookies
-    let command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android,android_embed,mediaconnect" "${url}"`;
+    let command;
     let tempCookiesFile = null;
 
-    if (cookiesContent) {
-      // Create temporary cookies file from content
-      tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
-      await fs.writeFile(tempCookiesFile, cookiesContent);
-      command += ` --cookies "${tempCookiesFile}"`;
-    } else if (cookies) {
-      // Use cookies file path
-      command += ` --cookies "${cookies}"`;
+    if (cookiesContent || cookies) {
+      // Use cookies with default client (cookies don't work with android client)
+      command = `yt-dlp -J --skip-download "${url}"`;
+      if (cookiesContent) {
+        tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
+        await fs.writeFile(tempCookiesFile, cookiesContent);
+        command += ` --cookies "${tempCookiesFile}"`;
+      } else if (cookies) {
+        command += ` --cookies "${cookies}"`;
+      }
+    } else {
+      // No cookies - use android client to avoid challenges
+      command = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
     }
     console.log("command", command);
     const { stdout } = await execAsync(command);
@@ -168,9 +173,13 @@ app.post('/download', async (req, res) => {
     //   /                       - OR (fallback if above fails)
     //   best[height<=720]       - best pre-merged format with max 720p
     const formatSelector = format || 'bestvideo[height<=720]+bestaudio/best[height<=720]';
-    let command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android,android_embed,mediaconnect" -o "${outputPath}"`;
+    let command;
     if (cookiesFile) {
-      command += ` --cookies "${cookiesFile}"`;
+      // Use cookies with default client (cookies don't work with android client)
+      command = `yt-dlp -f "${formatSelector}" -o "${outputPath}" --cookies "${cookiesFile}"`;
+    } else {
+      // No cookies - use android client to avoid challenges
+      command = `yt-dlp -f "${formatSelector}" --extractor-args "youtube:player_client=android" -o "${outputPath}"`;
     }
     command += ` "${url}"`;
     console.log("command", command);
@@ -178,9 +187,11 @@ app.post('/download', async (req, res) => {
     await execAsync(command);
 
     // Get the actual filename (yt-dlp substitutes template variables)
-    let infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android,android_embed,mediaconnect" "${url}"`;
+    let infoCommand;
     if (cookiesFile) {
-      infoCommand += ` --cookies "${cookiesFile}"`;
+      infoCommand = `yt-dlp --dump-json "${url}" --cookies "${cookiesFile}"`;
+    } else {
+      infoCommand = `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "${url}"`;
     }
 
     const { stdout } = await execAsync(infoCommand);
