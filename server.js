@@ -89,7 +89,7 @@ app.post('/info', async (req, res) => {
     }
 
     // Build command with optional cookies
-    let command = `yt-dlp --js-runtimes deno --dump-json "${url}"`;
+    let command = `yt-dlp --js-runtimes node --dump-json "${url}"`;
     let tempCookiesFile = null;
 
     if (cookiesContent) {
@@ -101,7 +101,7 @@ app.post('/info', async (req, res) => {
       // Use cookies file path
       command += ` --cookies "${cookies}"`;
     }
-
+    console.log("command", command);
     const { stdout } = await execAsync(command);
     const info = JSON.parse(stdout);
 
@@ -161,17 +161,17 @@ app.post('/download', async (req, res) => {
     }
 
     // Build command with optional cookies
-    let command = `yt-dlp --js-runtimes deno -f "${format}" -o "${outputPath}"`;
+    let command = `yt-dlp --js-runtimes node -f "${format}" -o "${outputPath}"`;
     if (cookiesFile) {
       command += ` --cookies "${cookiesFile}"`;
     }
     command += ` "${url}"`;
-
+    console.log("command", command);
     // Execute the download
     await execAsync(command);
 
     // Get the actual filename (yt-dlp substitutes template variables)
-    let infoCommand = `yt-dlp --js-runtimes deno --dump-json "${url}"`;
+    let infoCommand = `yt-dlp --js-runtimes node --dump-json "${url}"`;
     if (cookiesFile) {
       infoCommand += ` --cookies "${cookiesFile}"`;
     }
