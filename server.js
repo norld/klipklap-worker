@@ -94,7 +94,8 @@ app.post('/info', async (req, res) => {
 
     if (cookiesContent || cookies) {
       // Use cookies with default client (cookies don't work with android client)
-      command = `yt-dlp --list-formats -J --skip-download --js-runtimes node "${url}"`;
+      // Prefer Deno for JS runtime as it handles YouTube challenges better
+      command = `yt-dlp --list-formats -J --skip-download "${url}"`;
       if (cookiesContent) {
         tempCookiesFile = path.join(DOWNLOADS_DIR, `temp_cookies_${Date.now()}.txt`);
         await fs.writeFile(tempCookiesFile, cookiesContent);
