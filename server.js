@@ -89,7 +89,7 @@ app.post('/info', async (req, res) => {
     }
 
     // Build command with optional cookies
-    let command = `yt-dlp --js-runtimes node --dump-json "${url}"`;
+    let command = `yt-dlp --dump-json "${url}"`;
     let tempCookiesFile = null;
 
     if (cookiesContent) {
@@ -140,7 +140,7 @@ app.post('/info', async (req, res) => {
 // Download video endpoint
 app.post('/download', async (req, res) => {
   try {
-    const { url, format = 'best', filename, cookies, cookiesContent } = req.body;
+    const { url, format, filename, cookies, cookiesContent } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
@@ -161,7 +161,14 @@ app.post('/download', async (req, res) => {
     }
 
     // Build command with optional cookies
-    let command = `yt-dlp --js-runtimes node -f "${format}" -o "${outputPath}"`;
+    // Default format: best video up to 720p + best audio, merged
+    // Format selector explanation:
+    //   bestvideo[height<=720]  - best quality video with max 720p height
+    //   bestaudio               - best quality audio
+    //   /                       - OR (fallback if above fails)
+    //   best[height<=720]       - best pre-merged format with max 720p
+    const formatSelector = format || 'bestvideo[height<=720]+bestaudio/best[height<=720]';
+    let command = `yt-dlp -f "${formatSelector}" -o "${outputPath}"`;
     if (cookiesFile) {
       command += ` --cookies "${cookiesFile}"`;
     }
@@ -171,7 +178,7 @@ app.post('/download', async (req, res) => {
     await execAsync(command);
 
     // Get the actual filename (yt-dlp substitutes template variables)
-    let infoCommand = `yt-dlp --js-runtimes node --dump-json "${url}"`;
+    let infoCommand = `yt-dlp --dump-json "${url}"`;
     if (cookiesFile) {
       infoCommand += ` --cookies "${cookiesFile}"`;
     }
